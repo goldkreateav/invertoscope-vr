@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Инвертоскоп</string>
+    <string name="openxr_status_placeholder">Проверка OpenXR</string>
+    <string name="openxr_status_initial">Проверка среды выполнения...</string>
+    <string name="permission_required_status">Для работы нужны разрешения камеры</string>
+    <string name="safety_notice">Не медицинское изделие. Прекращайте при дискомфорте.</string>
+    <string name="left_eye_header">Левый глаз</string>
+    <string name="right_eye_header">Правый глаз</string>
+    <string name="rotation_label">Поворот</string>
+    <string name="mirror_x">Зеркало по X</string>
+    <string name="mirror_y">Зеркало по Y</string>
+    <string name="preset_mirror_left">Пресет: зеркало слева</string>
+    <string name="preset_rotate_right">Пресет: 180° справа</string>
+    <string name="reset">Сброс</string>
+</resources>
