@@ -13,5 +13,4 @@ object OpenXrBridge {
     external fun onPause()
     external fun getCameraTextureId(eye: Int): Int
     external fun setCameraTextureMatrix(eye: Int, matrix4x4: FloatArray)
-    external fun setEyeTransform(eye: Int, rotationDegrees: Float, mirrorX: Boolean, mirrorY: Boolean)
 }

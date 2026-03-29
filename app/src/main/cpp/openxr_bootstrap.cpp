@@ -14,6 +14,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -22,6 +23,7 @@ namespace {
 
 constexpr const char* TAG = "InvertoscopeXR";
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 
 struct EyeTransform {
     float rotationDegrees = 0.0f;
@@ -53,6 +55,7 @@ public:
 
         running_ = true;
         paused_ = false;
+        inputEnabled_ = true;
         initDone_ = false;
         initStatus_ = "Инициализация OpenXR...";
         renderThread_ = std::thread(&InvertoscopeRuntime::RenderLoop, this);
@@ -92,15 +95,58 @@ public:
         std::memcpy(textureMatrices_[eye].data(), matrix16, sizeof(float) * 16);
     }
 
-    void SetEyeTransform(int eye, float rotationDegrees, bool mirrorX, bool mirrorY) {
-        if (eye < 0 || eye > 1) return;
-        std::lock_guard<std::mutex> lock(dataMutex_);
-        transforms_[eye].rotationDegrees = rotationDegrees;
-        transforms_[eye].mirrorX = mirrorX;
-        transforms_[eye].mirrorY = mirrorY;
+private:
+    bool CheckXr(XrResult result, const char* op, bool fatal = true) {
+        if (result == XR_SUCCESS) return true;
+        std::ostringstream oss;
+        oss << op << " failed, XrResult=" << static_cast<int>(result);
+        LOGE("%s", oss.str().c_str());
+        if (fatal) {
+            initStatus_ = "OpenXR ошибка: " + std::string(op);
+        }
+        return false;
     }
 
-private:
+    int64_t ChooseSwapchainFormat() {
+        uint32_t formatCount = 0;
+        if (!CheckXr(xrEnumerateSwapchainFormats_(session_, 0, &formatCount, nullptr), "xrEnumerateSwapchainFormats(count)")) {
+            return 0;
+        }
+        if (formatCount == 0) {
+            initStatus_ = "OpenXR: runtime не вернул swapchain format";
+            return 0;
+        }
+
+        std::vector<int64_t> formats(formatCount, 0);
+        if (!CheckXr(xrEnumerateSwapchainFormats_(session_, formatCount, &formatCount, formats.data()), "xrEnumerateSwapchainFormats(data)")) {
+            return 0;
+        }
+
+        const std::array<int64_t, 3> preferred = {
+            static_cast<int64_t>(GL_SRGB8_ALPHA8),
+            static_cast<int64_t>(GL_RGBA8),
+            static_cast<int64_t>(GL_RGBA16F)
+        };
+
+        for (int64_t candidate : preferred) {
+            for (int64_t f : formats) {
+                if (f == candidate) {
+                    LOGI("Selected swapchain format: %lld", static_cast<long long>(candidate));
+                    return candidate;
+                }
+            }
+        }
+
+        std::ostringstream oss;
+        oss << "OpenXR: нет подходящего swapchain format. Доступно: ";
+        for (size_t i = 0; i < formats.size(); ++i) {
+            oss << formats[i] << (i + 1 < formats.size() ? ", " : "");
+        }
+        initStatus_ = oss.str();
+        LOGE("%s", initStatus_.c_str());
+        return 0;
+    }
+
     void RenderLoop() {
         JNIEnv* env = nullptr;
         javaVm_->AttachCurrentThread(&env, nullptr);
@@ -203,6 +249,7 @@ private:
                LoadFn(instance_, "xrEnumerateViewConfigurationViews", reinterpret_cast<PFN_xrVoidFunction*>(&xrEnumerateViewConfigurationViews_)) &&
                LoadFn(instance_, "xrCreateSwapchain", reinterpret_cast<PFN_xrVoidFunction*>(&xrCreateSwapchain_)) &&
                LoadFn(instance_, "xrDestroySwapchain", reinterpret_cast<PFN_xrVoidFunction*>(&xrDestroySwapchain_)) &&
+               LoadFn(instance_, "xrEnumerateSwapchainFormats", reinterpret_cast<PFN_xrVoidFunction*>(&xrEnumerateSwapchainFormats_)) &&
                LoadFn(instance_, "xrEnumerateSwapchainImages", reinterpret_cast<PFN_xrVoidFunction*>(&xrEnumerateSwapchainImages_)) &&
                LoadFn(instance_, "xrAcquireSwapchainImage", reinterpret_cast<PFN_xrVoidFunction*>(&xrAcquireSwapchainImage_)) &&
                LoadFn(instance_, "xrWaitSwapchainImage", reinterpret_cast<PFN_xrVoidFunction*>(&xrWaitSwapchainImage_)) &&
@@ -331,18 +378,28 @@ private:
 
     bool CreateSwapchains() {
         uint32_t count = 0;
-        if (xrEnumerateViewConfigurationViews_(instance_, systemId_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr) != XR_SUCCESS || count < 2) {
+        if (!CheckXr(
+                xrEnumerateViewConfigurationViews_(instance_, systemId_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 0, &count, nullptr),
+                "xrEnumerateViewConfigurationViews(count)")) {
+            return false;
+        }
+        if (count < 2) {
             initStatus_ = "OpenXR: stereo view configuration недоступна";
             return false;
         }
         std::vector<XrViewConfigurationView> cfg(count, {XR_TYPE_VIEW_CONFIGURATION_VIEW});
-        if (xrEnumerateViewConfigurationViews_(instance_, systemId_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, count, &count, cfg.data()) != XR_SUCCESS) {
-            initStatus_ = "OpenXR: enumerate views failed";
+        if (!CheckXr(
+                xrEnumerateViewConfigurationViews_(instance_, systemId_, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, count, &count, cfg.data()),
+                "xrEnumerateViewConfigurationViews(data)")) {
             return false;
         }
 
         views_.resize(count, {XR_TYPE_VIEW});
         projectionViews_.resize(count, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW});
+        const int64_t selectedFormat = ChooseSwapchainFormat();
+        if (selectedFormat == 0) {
+            return false;
+        }
 
         for (uint32_t eye = 0; eye < 2; ++eye) {
             swapchains_[eye].width = static_cast<int32_t>(cfg[eye].recommendedImageRectWidth);
@@ -355,17 +412,22 @@ private:
             scInfo.sampleCount = cfg[eye].recommendedSwapchainSampleCount;
             scInfo.width = cfg[eye].recommendedImageRectWidth;
             scInfo.height = cfg[eye].recommendedImageRectHeight;
-            scInfo.format = GL_RGBA8;
+            scInfo.format = selectedFormat;
             scInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-            if (xrCreateSwapchain_(session_, &scInfo, &swapchains_[eye].handle) != XR_SUCCESS) {
-                initStatus_ = "OpenXR: swapchain create failed";
+            if (!CheckXr(xrCreateSwapchain_(session_, &scInfo, &swapchains_[eye].handle), "xrCreateSwapchain")) {
                 return false;
             }
 
             uint32_t imageCount = 0;
-            xrEnumerateSwapchainImages_(swapchains_[eye].handle, 0, &imageCount, nullptr);
+            if (!CheckXr(xrEnumerateSwapchainImages_(swapchains_[eye].handle, 0, &imageCount, nullptr), "xrEnumerateSwapchainImages(count)")) {
+                return false;
+            }
             swapchains_[eye].images.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR});
-            xrEnumerateSwapchainImages_(swapchains_[eye].handle, imageCount, &imageCount, reinterpret_cast<XrSwapchainImageBaseHeader*>(swapchains_[eye].images.data()));
+            if (!CheckXr(
+                    xrEnumerateSwapchainImages_(swapchains_[eye].handle, imageCount, &imageCount, reinterpret_cast<XrSwapchainImageBaseHeader*>(swapchains_[eye].images.data())),
+                    "xrEnumerateSwapchainImages(data)")) {
+                return false;
+            }
             swapchains_[eye].framebuffers.resize(imageCount, 0);
             glGenFramebuffers(static_cast<GLsizei>(imageCount), swapchains_[eye].framebuffers.data());
         }
@@ -470,8 +532,8 @@ void main() {
             return false;
         }
 
-        xrStringToPath_(instance_, "/user/hand/left", &leftHandPath_);
-        xrStringToPath_(instance_, "/user/hand/right", &rightHandPath_);
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/left", &leftHandPath_), "xrStringToPath(left)")) return false;
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/right", &rightHandPath_), "xrStringToPath(right)")) return false;
         std::array<XrPath, 2> hands{leftHandPath_, rightHandPath_};
 
         XrActionCreateInfo mirrorLeft{XR_TYPE_ACTION_CREATE_INFO};
@@ -480,7 +542,7 @@ void main() {
         std::strncpy(mirrorLeft.localizedActionName, "Mirror Left", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
         mirrorLeft.countSubactionPaths = static_cast<uint32_t>(hands.size());
         mirrorLeft.subactionPaths = hands.data();
-        xrCreateAction_(actionSet_, &mirrorLeft, &mirrorLeftAction_);
+        if (!CheckXr(xrCreateAction_(actionSet_, &mirrorLeft, &mirrorLeftAction_), "xrCreateAction(mirror_left)")) return false;
 
         XrActionCreateInfo mirrorRight{XR_TYPE_ACTION_CREATE_INFO};
         mirrorRight.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
@@ -488,7 +550,7 @@ void main() {
         std::strncpy(mirrorRight.localizedActionName, "Mirror Right", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
         mirrorRight.countSubactionPaths = static_cast<uint32_t>(hands.size());
         mirrorRight.subactionPaths = hands.data();
-        xrCreateAction_(actionSet_, &mirrorRight, &mirrorRightAction_);
+        if (!CheckXr(xrCreateAction_(actionSet_, &mirrorRight, &mirrorRightAction_), "xrCreateAction(mirror_right)")) return false;
 
         XrActionCreateInfo rotateLeft{XR_TYPE_ACTION_CREATE_INFO};
         rotateLeft.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
@@ -496,7 +558,7 @@ void main() {
         std::strncpy(rotateLeft.localizedActionName, "Rotate Left", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
         rotateLeft.countSubactionPaths = static_cast<uint32_t>(hands.size());
         rotateLeft.subactionPaths = hands.data();
-        xrCreateAction_(actionSet_, &rotateLeft, &rotateLeftAction_);
+        if (!CheckXr(xrCreateAction_(actionSet_, &rotateLeft, &rotateLeftAction_), "xrCreateAction(rotate_left)")) return false;
 
         XrActionCreateInfo rotateRight{XR_TYPE_ACTION_CREATE_INFO};
         rotateRight.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
@@ -504,18 +566,18 @@ void main() {
         std::strncpy(rotateRight.localizedActionName, "Rotate Right", XR_MAX_LOCALIZED_ACTION_NAME_SIZE - 1);
         rotateRight.countSubactionPaths = static_cast<uint32_t>(hands.size());
         rotateRight.subactionPaths = hands.data();
-        xrCreateAction_(actionSet_, &rotateRight, &rotateRightAction_);
+        if (!CheckXr(xrCreateAction_(actionSet_, &rotateRight, &rotateRightAction_), "xrCreateAction(rotate_right)")) return false;
 
         XrPath profile = XR_NULL_PATH;
         XrPath leftX = XR_NULL_PATH;
         XrPath rightA = XR_NULL_PATH;
         XrPath leftStickX = XR_NULL_PATH;
         XrPath rightStickX = XR_NULL_PATH;
-        xrStringToPath_(instance_, "/interaction_profiles/oculus/touch_controller", &profile);
-        xrStringToPath_(instance_, "/user/hand/left/input/x/click", &leftX);
-        xrStringToPath_(instance_, "/user/hand/right/input/a/click", &rightA);
-        xrStringToPath_(instance_, "/user/hand/left/input/thumbstick/x", &leftStickX);
-        xrStringToPath_(instance_, "/user/hand/right/input/thumbstick/x", &rightStickX);
+        if (!CheckXr(xrStringToPath_(instance_, "/interaction_profiles/oculus/touch_controller", &profile), "xrStringToPath(profile)")) return false;
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/left/input/x/click", &leftX), "xrStringToPath(leftX)")) return false;
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/right/input/a/click", &rightA), "xrStringToPath(rightA)")) return false;
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/left/input/thumbstick/x", &leftStickX), "xrStringToPath(leftStickX)")) return false;
+        if (!CheckXr(xrStringToPath_(instance_, "/user/hand/right/input/thumbstick/x", &rightStickX), "xrStringToPath(rightStickX)")) return false;
 
         std::array<XrActionSuggestedBinding, 4> bindings{{
             {mirrorLeftAction_, leftX},
@@ -528,14 +590,17 @@ void main() {
         suggested.interactionProfile = profile;
         suggested.suggestedBindings = bindings.data();
         suggested.countSuggestedBindings = static_cast<uint32_t>(bindings.size());
-        xrSuggestInteractionProfileBindings_(instance_, &suggested);
+        if (!CheckXr(xrSuggestInteractionProfileBindings_(instance_, &suggested), "xrSuggestInteractionProfileBindings", false)) {
+            inputEnabled_ = false;
+            LOGE("Input bindings disabled, rendering will continue without controller mapping.");
+        }
 
         XrSessionActionSetsAttachInfo attach{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
         attach.countActionSets = 1;
         attach.actionSets = &actionSet_;
-        if (xrAttachSessionActionSets_(session_, &attach) != XR_SUCCESS) {
-            initStatus_ = "OpenXR: attach actions failed";
-            return false;
+        if (!CheckXr(xrAttachSessionActionSets_(session_, &attach), "xrAttachSessionActionSets", false)) {
+            inputEnabled_ = false;
+            LOGE("Action sets attach failed, rendering will continue without input.");
         }
         return true;
     }
@@ -559,12 +624,17 @@ void main() {
     }
 
     void SyncInput(XrDuration predictedDisplayPeriod) {
+        if (!inputEnabled_) return;
         XrActiveActionSet active{};
         active.actionSet = actionSet_;
         XrActionsSyncInfo sync{XR_TYPE_ACTIONS_SYNC_INFO};
         sync.countActiveActionSets = 1;
         sync.activeActionSets = &active;
-        xrSyncActions_(session_, &sync);
+        if (!CheckXr(xrSyncActions_(session_, &sync), "xrSyncActions", false)) {
+            inputEnabled_ = false;
+            LOGE("xrSyncActions failed, input disabled for current session.");
+            return;
+        }
 
         const bool leftPressed = GetActionBool(mirrorLeftAction_, leftHandPath_);
         const bool rightPressed = GetActionBool(mirrorRightAction_, rightHandPath_);
@@ -609,10 +679,10 @@ void main() {
         auto& sc = swapchains_[eye];
         uint32_t imageIndex = 0;
         XrSwapchainImageAcquireInfo acquire{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-        xrAcquireSwapchainImage_(sc.handle, &acquire, &imageIndex);
+        if (!CheckXr(xrAcquireSwapchainImage_(sc.handle, &acquire, &imageIndex), "xrAcquireSwapchainImage", false)) return;
         XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
         wait.timeout = XR_INFINITE_DURATION;
-        xrWaitSwapchainImage_(sc.handle, &wait);
+        if (!CheckXr(xrWaitSwapchainImage_(sc.handle, &wait), "xrWaitSwapchainImage", false)) return;
 
         glBindFramebuffer(GL_FRAMEBUFFER, sc.framebuffers[imageIndex]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sc.images[imageIndex].image, 0);
@@ -637,7 +707,7 @@ void main() {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
         XrSwapchainImageReleaseInfo release{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-        xrReleaseSwapchainImage_(sc.handle, &release);
+        CheckXr(xrReleaseSwapchainImage_(sc.handle, &release), "xrReleaseSwapchainImage", false);
 
         projectionViews_[eye] = {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW};
         projectionViews_[eye].pose = views_[eye].pose;
@@ -759,6 +829,7 @@ private:
     std::array<GLuint, 2> cameraTextureIds_{0, 0};
     bool prevLeftPressed_ = false;
     bool prevRightPressed_ = false;
+    bool inputEnabled_ = true;
 
     void* loaderHandle_ = nullptr;
 
@@ -773,6 +844,7 @@ private:
     PFN_xrEnumerateViewConfigurationViews xrEnumerateViewConfigurationViews_ = nullptr;
     PFN_xrCreateSwapchain xrCreateSwapchain_ = nullptr;
     PFN_xrDestroySwapchain xrDestroySwapchain_ = nullptr;
+    PFN_xrEnumerateSwapchainFormats xrEnumerateSwapchainFormats_ = nullptr;
     PFN_xrEnumerateSwapchainImages xrEnumerateSwapchainImages_ = nullptr;
     PFN_xrAcquireSwapchainImage xrAcquireSwapchainImage_ = nullptr;
     PFN_xrWaitSwapchainImage xrWaitSwapchainImage_ = nullptr;
@@ -866,9 +938,4 @@ Java_com_invertoscope_quest_xr_OpenXrBridge_setCameraTextureMatrix(JNIEnv* env, 
     jfloat values[16];
     env->GetFloatArrayRegion(matrix4x4, 0, 16, values);
     gRuntime.SetCameraTextureMatrix(static_cast<int>(eye), values);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_invertoscope_quest_xr_OpenXrBridge_setEyeTransform(JNIEnv* /*env*/, jobject /*thiz*/, jint eye, jfloat rotationDegrees, jboolean mirrorX, jboolean mirrorY) {
-    gRuntime.SetEyeTransform(static_cast<int>(eye), rotationDegrees, mirrorX == JNI_TRUE, mirrorY == JNI_TRUE);
 }
