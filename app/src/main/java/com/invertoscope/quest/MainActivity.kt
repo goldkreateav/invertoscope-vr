@@ -2,108 +2,76 @@ package com.invertoscope.quest
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.os.Bundle
-import android.widget.SeekBar
+import android.view.Surface
 import androidx.activity.ComponentActivity
+import androidx.annotation.Keep
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.invertoscope.quest.databinding.ActivityMainBinding
-import com.invertoscope.quest.gl.EyeTransform
 import com.invertoscope.quest.xr.OpenXrBridge
 
 class MainActivity : ComponentActivity() {
     private lateinit var binding: ActivityMainBinding
+    private val cameraController by lazy { com.invertoscope.quest.camera.DualCameraController(this) }
+    private var runtimeStarted = false
 
-    private val leftEye = EyeTransform()
-    private val rightEye = EyeTransform()
+    private var leftSurfaceTexture: SurfaceTexture? = null
+    private var rightSurfaceTexture: SurfaceTexture? = null
+    private var leftSurface: Surface? = null
+    private var rightSurface: Surface? = null
+    private val leftMatrix = FloatArray(16)
+    private val rightMatrix = FloatArray(16)
+    @Volatile
+    private var leftFrameAvailable = false
+    @Volatile
+    private var rightFrameAvailable = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-
-        binding.openxrStatusText.text = OpenXrBridge.bootstrapRuntimeInfo()
-        setupControls()
-        requestCameraPermissions()
+        requestCameraPermissionsAndStart()
     }
 
-    private fun setupControls() {
-        binding.leftRotationSeek.setOnSeekBarChangeListener(rotationListener(leftEye, isLeft = true))
-        binding.rightRotationSeek.setOnSeekBarChangeListener(rotationListener(rightEye, isLeft = false))
-
-        binding.leftMirrorXSwitch.setOnCheckedChangeListener { _, checked ->
-            leftEye.mirrorX = checked
-            binding.stereoGlView.updateLeftEye(leftEye.copy())
+    private fun startImmersiveRuntime() {
+        if (runtimeStarted) {
+            cameraController.start(leftSurface, rightSurface)
+            return
         }
-        binding.leftMirrorYSwitch.setOnCheckedChangeListener { _, checked ->
-            leftEye.mirrorY = checked
-            binding.stereoGlView.updateLeftEye(leftEye.copy())
+        val status = OpenXrBridge.start(this, this)
+        binding.openxrStatusText.text = status
+        val leftTexId = OpenXrBridge.getCameraTextureId(0)
+        val rightTexId = OpenXrBridge.getCameraTextureId(1)
+        if (leftTexId <= 0 || rightTexId <= 0) {
+            binding.openxrStatusText.text = "$status\nНе удалось создать GL-текстуры камер."
+            return
         }
-        binding.rightMirrorXSwitch.setOnCheckedChangeListener { _, checked ->
-            rightEye.mirrorX = checked
-            binding.stereoGlView.updateRightEye(rightEye.copy())
-        }
-        binding.rightMirrorYSwitch.setOnCheckedChangeListener { _, checked ->
-            rightEye.mirrorY = checked
-            binding.stereoGlView.updateRightEye(rightEye.copy())
-        }
-
-        binding.presetMirrorLeftButton.setOnClickListener {
-            leftEye.rotationDegrees = 0f
-            leftEye.mirrorX = true
-            leftEye.mirrorY = false
-            pushTransformsToUi()
-        }
-
-        binding.presetRotateRightButton.setOnClickListener {
-            rightEye.rotationDegrees = 180f
-            rightEye.mirrorX = false
-            rightEye.mirrorY = false
-            pushTransformsToUi()
-        }
-
-        binding.resetButton.setOnClickListener {
-            leftEye.rotationDegrees = 0f
-            leftEye.mirrorX = false
-            leftEye.mirrorY = false
-            rightEye.rotationDegrees = 0f
-            rightEye.mirrorX = false
-            rightEye.mirrorY = false
-            pushTransformsToUi()
-            binding.stereoGlView.reset()
-        }
+        setupCameraSurfaces(leftTexId, rightTexId)
+        cameraController.start(leftSurface, rightSurface)
+        runtimeStarted = true
     }
 
-    private fun pushTransformsToUi() {
-        binding.leftRotationSeek.progress = leftEye.rotationDegrees.toInt()
-        binding.leftMirrorXSwitch.isChecked = leftEye.mirrorX
-        binding.leftMirrorYSwitch.isChecked = leftEye.mirrorY
+    private fun setupCameraSurfaces(leftTexId: Int, rightTexId: Int) {
+        leftSurfaceTexture?.release()
+        rightSurfaceTexture?.release()
+        leftSurface?.release()
+        rightSurface?.release()
 
-        binding.rightRotationSeek.progress = rightEye.rotationDegrees.toInt()
-        binding.rightMirrorXSwitch.isChecked = rightEye.mirrorX
-        binding.rightMirrorYSwitch.isChecked = rightEye.mirrorY
-
-        binding.stereoGlView.updateLeftEye(leftEye.copy())
-        binding.stereoGlView.updateRightEye(rightEye.copy())
-    }
-
-    private fun rotationListener(model: EyeTransform, isLeft: Boolean): SeekBar.OnSeekBarChangeListener {
-        return object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                model.rotationDegrees = progress.toFloat()
-                if (isLeft) {
-                    binding.stereoGlView.updateLeftEye(model.copy())
-                } else {
-                    binding.stereoGlView.updateRightEye(model.copy())
-                }
-            }
-
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        leftSurfaceTexture = SurfaceTexture(leftTexId).apply {
+            setOnFrameAvailableListener { leftFrameAvailable = true }
+            setDefaultBufferSize(1280, 720)
         }
+        rightSurfaceTexture = SurfaceTexture(rightTexId).apply {
+            setOnFrameAvailableListener { rightFrameAvailable = true }
+            setDefaultBufferSize(1280, 720)
+        }
+        leftSurface = Surface(leftSurfaceTexture)
+        rightSurface = Surface(rightSurfaceTexture)
     }
 
-    private fun requestCameraPermissions() {
+    private fun requestCameraPermissionsAndStart() {
         val permissions = arrayOf(
             Manifest.permission.CAMERA,
             "horizonos.permission.HEADSET_CAMERA"
@@ -116,7 +84,31 @@ class MainActivity : ComponentActivity() {
         if (missing.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_PERMISSIONS)
         } else {
-            binding.stereoGlView.onPermissionsGranted()
+            startImmersiveRuntime()
+        }
+    }
+
+    /**
+     * Called from native render thread once per XR frame.
+     */
+    @Keep
+    fun onNativeUpdateCameraTextures(): Boolean {
+        try {
+            if (leftFrameAvailable) {
+                leftSurfaceTexture?.updateTexImage()
+                leftSurfaceTexture?.getTransformMatrix(leftMatrix)
+                OpenXrBridge.setCameraTextureMatrix(0, leftMatrix)
+                leftFrameAvailable = false
+            }
+            if (rightFrameAvailable) {
+                rightSurfaceTexture?.updateTexImage()
+                rightSurfaceTexture?.getTransformMatrix(rightMatrix)
+                OpenXrBridge.setCameraTextureMatrix(1, rightMatrix)
+                rightFrameAvailable = false
+            }
+            return true
+        } catch (_: Throwable) {
+            return false
         }
     }
 
@@ -128,7 +120,7 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQUEST_PERMISSIONS) {
             if (grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-                binding.stereoGlView.onPermissionsGranted()
+                startImmersiveRuntime()
             } else {
                 binding.openxrStatusText.text = getString(R.string.permission_required_status)
             }
@@ -137,14 +129,25 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        binding.stereoGlView.onResume()
-        requestCameraPermissions()
+        OpenXrBridge.onResume()
+        requestCameraPermissionsAndStart()
     }
 
     override fun onPause() {
-        binding.stereoGlView.stopCamera()
-        binding.stereoGlView.onPause()
+        cameraController.stop()
+        OpenXrBridge.onPause()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        cameraController.stop()
+        leftSurface?.release()
+        rightSurface?.release()
+        leftSurfaceTexture?.release()
+        rightSurfaceTexture?.release()
+        OpenXrBridge.stop()
+        runtimeStarted = false
+        super.onDestroy()
     }
 
     companion object {

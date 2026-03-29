@@ -3,6 +3,7 @@
 
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+    <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" />
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="horizonos.permission.HEADSET_CAMERA" />
@@ -16,10 +17,12 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:screenOrientation="landscape">
+            android:screenOrientation="landscape"
+            android:resizeableActivity="false">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="com.oculus.intent.category.VR" />
             </intent-filter>
         </activity>
     </application>

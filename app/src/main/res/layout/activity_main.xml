@@ -1,148 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/rootContainer"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#101010"
+    android:orientation="vertical"
+    android:padding="20dp">
 
-    <com.invertoscope.quest.gl.StereoGlSurfaceView
-        android:id="@+id/stereoGlView"
+    <TextView
+        android:id="@+id/openxrStatusText"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
-
-    <LinearLayout
-        android:id="@+id/controlsPanel"
-        android:layout_width="360dp"
         android:layout_height="wrap_content"
-        android:layout_gravity="top|end"
-        android:layout_margin="16dp"
-        android:background="#AA111111"
-        android:orientation="vertical"
-        android:padding="12dp">
+        android:text="@string/openxr_status_initial"
+        android:textColor="@android:color/white"
+        android:textSize="16sp"
+        android:textStyle="bold" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/openxr_status_placeholder"
-            android:textColor="@android:color/white"
-            android:textStyle="bold" />
+    <TextView
+        android:id="@+id/controlHintText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/xr_controls_hint"
+        android:textColor="#E0E0E0"
+        android:textSize="14sp" />
 
-        <TextView
-            android:id="@+id/openxrStatusText"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="@string/openxr_status_initial"
-            android:textColor="@android:color/white" />
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:text="@string/safety_notice"
+        android:textColor="#FFEB3B"
+        android:textSize="13sp" />
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginBottom="8dp"
-            android:text="@string/safety_notice"
-            android:textColor="#FFEB3B"
-            android:textSize="12sp" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/left_eye_header"
-            android:textColor="@android:color/white"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/rotation_label"
-            android:textColor="@android:color/white" />
-
-        <SeekBar
-            android:id="@+id/leftRotationSeek"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:max="360"
-            android:progress="0" />
-
-        <Switch
-            android:id="@+id/leftMirrorXSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/mirror_x"
-            android:textColor="@android:color/white" />
-
-        <Switch
-            android:id="@+id/leftMirrorYSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/mirror_y"
-            android:textColor="@android:color/white" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginVertical="8dp"
-            android:background="#66FFFFFF" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/right_eye_header"
-            android:textColor="@android:color/white"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/rotation_label"
-            android:textColor="@android:color/white" />
-
-        <SeekBar
-            android:id="@+id/rightRotationSeek"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:max="360"
-            android:progress="0" />
-
-        <Switch
-            android:id="@+id/rightMirrorXSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/mirror_x"
-            android:textColor="@android:color/white" />
-
-        <Switch
-            android:id="@+id/rightMirrorYSwitch"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/mirror_y"
-            android:textColor="@android:color/white" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:gravity="end"
-            android:orientation="horizontal">
-
-            <Button
-                android:id="@+id/presetMirrorLeftButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/preset_mirror_left" />
-
-            <Button
-                android:id="@+id/presetRotateRightButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/preset_rotate_right" />
-
-            <Button
-                android:id="@+id/resetButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/reset" />
-        </LinearLayout>
-    </LinearLayout>
-
-</FrameLayout>
+</LinearLayout>
